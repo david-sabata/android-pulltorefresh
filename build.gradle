@@ -23,7 +23,7 @@ android {
             manifest.srcFile 'pulltorefresh/AndroidManifest.xml'
             java.srcDirs = ['pulltorefresh/src']
             resources.srcDirs = ['pulltorefresh/src']
-            aild.srcDirs = ['pulltorefresh/src']
+            aidl.srcDirs = ['pulltorefresh/src']
             renderscript.srcDirs = ['pulltorefresh/src']
             res.srcDirs = ['pulltorefresh/res']
             assets.srcDirs = ['pulltorefresh/assets']
