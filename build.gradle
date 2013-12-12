@@ -1,0 +1,32 @@
+task wrapper(type: Wrapper) {
+    gradleVersion = '1.8'
+}
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:0.6.3'
+    }
+}
+
+apply plugin: 'android-library'
+
+android {
+    compileSdkVersion 15
+    buildToolsVersion "17.0"
+
+    sourceSets {
+        main {
+            manifest.srcFile 'pulltorefresh/AndroidManifest.xml'
+            java.srcDirs = ['pulltorefresh/src']
+            resources.srcDirs = ['pulltorefresh/src']
+            aild.srcDirs = ['pulltorefresh/src']
+            renderscript.srcDirs = ['pulltorefresh/src']
+            res.srcDirs = ['pulltorefresh/res']
+            assets.srcDirs = ['pulltorefresh/assets']
+        }
+    }
+}
