@@ -32,6 +32,11 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
 
     private static final int PULLBACK_ANIM_DURATION = 200;
 
+    /**
+     * Force applied against pulling down when the refresh box is fully visible
+     */
+    private static final float PULLOVER_TENSION = 3;
+
     private int mRefreshState = PULL_TO_REFRESH;
 
     private OnRefreshListener mOnRefreshListener;
@@ -362,9 +367,9 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
                 	mLastMotionY = historicalY;
                 }
 
-                // Calculate the padding to apply, we divide by 1.7 to
+                // Calculate the padding to apply, we divide by pullover tension to
                 // simulate a more resistant effect during pull.
-                int topPadding = mRefreshView.getPaddingTop() + (int)((historicalY - mLastMotionY)/1.7);
+                int topPadding = mRefreshView.getPaddingTop() + (int)((historicalY - mLastMotionY) / PULLOVER_TENSION);
                 mRefreshView.setPadding(
                         mRefreshView.getPaddingLeft(),
                         topPadding,
