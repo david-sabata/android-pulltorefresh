@@ -9,16 +9,18 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.Animation;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.RotateAnimation;
+import android.view.animation.Transformation;
 import android.widget.AbsListView;
+import android.widget.AbsListView.OnScrollListener;
 import android.widget.ImageView;
 import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
-import android.widget.AbsListView.OnScrollListener;
 
 import com.markupartist.android.widget.pulltorefresh.R;
 
@@ -27,6 +29,8 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     private static final int PULL_TO_REFRESH = 2;
     private static final int RELEASE_TO_REFRESH = 3;
     private static final int REFRESHING = 4;
+
+    private static final int PULLBACK_ANIM_DURATION = 200;
 
     private int mRefreshState = PULL_TO_REFRESH;
 
@@ -48,9 +52,11 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
 
     private RotateAnimation mFlipAnimation;
     private RotateAnimation mReverseFlipAnimation;
+    private Animation mPullbackAnimation;
 
     private int mRefreshViewHeight;
     private int mRefreshOriginalTopPadding;
+    private int mRefreshTopPaddingBeforePullback;
     private int mLastMotionY;
     private int mHeight = -1;
     private int mScrollPriorLast = -1;
@@ -141,6 +147,22 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
         mReverseFlipAnimation.setInterpolator(new LinearInterpolator());
         mReverseFlipAnimation.setDuration(250);
         mReverseFlipAnimation.setFillAfter(true);
+
+        mPullbackAnimation = new Animation() {
+            @Override
+            protected void applyTransformation(float interpolatedTime, Transformation t) {
+                mRefreshView.setPadding(
+                        mRefreshView.getPaddingLeft(),
+                        Math.max(
+                                mRefreshOriginalTopPadding,
+                                (int)(mRefreshTopPaddingBeforePullback * (1 - interpolatedTime))
+                        ),
+                        mRefreshView.getPaddingRight(),
+                        mRefreshView.getPaddingBottom()
+                );
+            }
+        };
+        mPullbackAnimation.setDuration(PULLBACK_ANIM_DURATION);
     }
 
     @Override
@@ -356,12 +378,19 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     /**
      * Sets the header padding back to original size.
      */
-    private void resetHeaderPadding() {
-        mRefreshView.setPadding(
-                mRefreshView.getPaddingLeft(),
-                mRefreshOriginalTopPadding,
-                mRefreshView.getPaddingRight(),
-                mRefreshView.getPaddingBottom());
+    private void resetHeaderPadding(boolean animated) {
+        if (!animated) {
+            mRefreshView.setPadding(
+                    mRefreshView.getPaddingLeft(),
+                    mRefreshOriginalTopPadding,
+                    mRefreshView.getPaddingRight(),
+                    mRefreshView.getPaddingBottom());
+        } else {
+            mRefreshTopPaddingBeforePullback = mRefreshView.getPaddingTop();
+
+            mRefreshView.clearAnimation();
+            mRefreshView.startAnimation(mPullbackAnimation);
+        }
     }
 
     /**
@@ -370,7 +399,7 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     private void resetHeader() {
         mRefreshState = PULL_TO_REFRESH;
 
-        resetHeaderPadding();
+        resetHeaderPadding(false);
 
         // Set refresh view text to the pull label
         mRefreshViewText.setText(R.string.pull_to_refresh_pull_label);
@@ -468,7 +497,7 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     }
 
     public void prepareForRefresh() {
-        resetHeaderPadding();
+        resetHeaderPadding(true);
 
         // We need this hack, otherwise it will keep the previous drawable.
         mRefreshViewImage.setImageDrawable(null);
