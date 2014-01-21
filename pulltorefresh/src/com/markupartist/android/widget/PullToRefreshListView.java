@@ -2,8 +2,9 @@ package com.markupartist.android.widget;
 
 
 import android.content.Context;
+import android.database.DataSetObserver;
+import android.graphics.Canvas;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -23,20 +24,19 @@ import com.markupartist.android.widget.pulltorefresh.R;
 
 public class PullToRefreshListView extends ListView implements OnScrollListener {
 
-    private static final int TAP_TO_REFRESH = 1;
     private static final int PULL_TO_REFRESH = 2;
     private static final int RELEASE_TO_REFRESH = 3;
     private static final int REFRESHING = 4;
 
-    private static final String TAG = "PullToRefreshListView";
+    private int mRefreshState = PULL_TO_REFRESH;
 
     private OnRefreshListener mOnRefreshListener;
+    private OnEndOfListReachedListener mOnEndOfListListener;
 
     /**
      * Listener that will receive notifications every time the list scrolls.
      */
     private OnScrollListener mOnScrollListener;
-    private LayoutInflater mInflater;
 
     private RelativeLayout mRefreshView;
     private TextView mRefreshViewText;
@@ -45,7 +45,6 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     private TextView mRefreshViewLastUpdated;
 
     private int mCurrentScrollState;
-    private int mRefreshState;
 
     private RotateAnimation mFlipAnimation;
     private RotateAnimation mReverseFlipAnimation;
@@ -53,8 +52,19 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     private int mRefreshViewHeight;
     private int mRefreshOriginalTopPadding;
     private int mLastMotionY;
+    private int mHeight = -1;
+    private int mScrollPriorLast = -1;
 
     private boolean mBounceHack;
+    private TextView mFooterView;
+
+    private DataSetObserver mDataSetObserver = new DataSetObserver() {
+        @Override
+        public void onChanged() {
+            super.onChanged();
+            adaptFooterHeight();
+        }
+    };
 
     public PullToRefreshListView(Context context) {
         super(context);
@@ -72,6 +82,52 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     }
 
     private void init(Context context) {
+        setupAnimations();
+
+        setupViews(context);
+
+        super.setOnScrollListener(this);
+    }
+
+    private void setupViews(Context context) {
+        LayoutInflater inflater = (LayoutInflater) context.getSystemService(
+                Context.LAYOUT_INFLATER_SERVICE);
+
+        // Refresh view
+		mRefreshView = (RelativeLayout) inflater.inflate(
+				R.layout.pull_to_refresh_header, this, false);
+		mRefreshView.setOnClickListener(new OnClickRefreshListener());
+
+		// The refresh view text label
+		mRefreshViewText =
+            (TextView) mRefreshView.findViewById(R.id.pull_to_refresh_text);
+
+		// The arrow
+		mRefreshViewImage =
+            (ImageView) mRefreshView.findViewById(R.id.pull_to_refresh_image);
+        mRefreshViewImage.setMinimumHeight(50);
+
+        // The progress spinner
+        mRefreshViewProgress =
+            (ProgressBar) mRefreshView.findViewById(R.id.pull_to_refresh_progress);
+
+        // The refresh view subtitle label.
+        mRefreshViewLastUpdated =
+            (TextView) mRefreshView.findViewById(R.id.pull_to_refresh_updated_at);
+
+        mFooterView = new TextView(context);
+        mFooterView.setText(" ");
+        mFooterView.setHeight(0);
+        addFooterView(mFooterView, null, false);
+
+        mRefreshOriginalTopPadding = mRefreshView.getPaddingTop();
+        addHeaderView(mRefreshView);
+
+        measureView(mRefreshView);
+        mRefreshViewHeight = mRefreshView.getMeasuredHeight();
+    }
+
+    private void setupAnimations() {
         // Load all of the animations we need in code rather than through XML
         mFlipAnimation = new RotateAnimation(0, -180,
                 RotateAnimation.RELATIVE_TO_SELF, 0.5f,
@@ -85,53 +141,121 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
         mReverseFlipAnimation.setInterpolator(new LinearInterpolator());
         mReverseFlipAnimation.setDuration(250);
         mReverseFlipAnimation.setFillAfter(true);
-
-        mInflater = (LayoutInflater) context.getSystemService(
-                Context.LAYOUT_INFLATER_SERVICE);
-
-		mRefreshView = (RelativeLayout) mInflater.inflate(
-				R.layout.pull_to_refresh_header, this, false);
-        mRefreshViewText =
-            (TextView) mRefreshView.findViewById(R.id.pull_to_refresh_text);
-        mRefreshViewImage =
-            (ImageView) mRefreshView.findViewById(R.id.pull_to_refresh_image);
-        mRefreshViewProgress =
-            (ProgressBar) mRefreshView.findViewById(R.id.pull_to_refresh_progress);
-        mRefreshViewLastUpdated =
-            (TextView) mRefreshView.findViewById(R.id.pull_to_refresh_updated_at);
-
-        mRefreshViewImage.setMinimumHeight(50);
-        mRefreshView.setOnClickListener(new OnClickRefreshListener());
-        mRefreshOriginalTopPadding = mRefreshView.getPaddingTop();
-
-        mRefreshState = TAP_TO_REFRESH;
-
-        addHeaderView(mRefreshView);
-
-        super.setOnScrollListener(this);
-
-        measureView(mRefreshView);
-        mRefreshViewHeight = mRefreshView.getMeasuredHeight();
     }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        if (mHeight == -1) {  // do it only once
+            mHeight = getHeight(); // getHeight only returns useful data after first onDraw()
+            adaptFooterHeight();
+        }
+    }
+
+    /**
+     * Sets list view selection to first element in adapter unless refreshing where it will set it to the refresh view element
+     */
+	private void setSelectionToFirst() {
+		if (getAdapter() != null && mRefreshState != REFRESHING) {
+			// This allows for the divider to push the selection down from the top so the fading edge doesn't obscure the first view
+			setSelectionFromTop(1, getDividerHeight());
+		} else {
+			// Refreshing or no adapter, display the refresh view
+			super.setSelection(0);
+		}
+	}
+
+	@Override
+	public void setSelection(int position) {
+		// If the 0th or 1st element do special behavior
+		if (position <= 1) {
+			setSelectionToFirst();
+		} else {
+			// Force to index 0 while refreshing, allow other indices while not
+			super.setSelection((mRefreshState == REFRESHING) ? 0 : position);
+		}
+	}
+
+	/**
+	 * Adapts the height of the footer view.
+	 */
+	private void adaptFooterHeight() {
+		if (mHeight == -1) {
+			return;
+		}
+		// We can fill up to the total height - header padding to get it off screen
+		int spaceToFill = mHeight - mRefreshOriginalTopPadding;
+		int itemHeight = getTotalItemHeight(spaceToFill);
+		spaceToFill -= itemHeight;
+
+		if (spaceToFill <= 0) {
+			mFooterView.setHeight(0);
+		} else {
+			mFooterView.setHeight(spaceToFill);
+			setSelectionToFirst();
+		}
+	}
+
+	/**
+	 * Calculates the combined height of all items in the adapter. Does not look at header and footer
+	 *
+	 * Modified from
+	 * http://iserveandroid.blogspot.com/2011/06/how-to-calculate-lsitviews-total.html
+	 *
+	 * @param spaceToFill
+	 *            the maximum item height we care about
+	 * @return total item height, capped to spaceToFill
+	 */
+	private int getTotalItemHeight(int spaceToFill) {
+		ListAdapter adapter = getAdapter();
+		// If no adapter there is no item height
+		if (adapter == null) {
+			return 0;
+		}
+		int listviewElementsheight = 0;
+		// Need to constrain width for lists with variable height items or items with wrapping text
+		int desiredWidth = MeasureSpec.makeMeasureSpec(getWidth(),
+				MeasureSpec.AT_MOST);
+		// Skip header and footer
+		for (int i = 1; i < adapter.getCount() - 1
+				&& listviewElementsheight < spaceToFill; i++) {
+			View mView = adapter.getView(i, null, this);
+			mView.measure(desiredWidth, View.MeasureSpec.UNSPECIFIED);
+			listviewElementsheight += mView.getMeasuredHeight();
+		}
+		// Add in dividers
+		listviewElementsheight += getDividerHeight() * (adapter.getCount() - 1);
+		if (listviewElementsheight > spaceToFill) {
+			listviewElementsheight = spaceToFill;
+		}
+		return listviewElementsheight;
+	}
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        setSelection(1);
+        setSelectionToFirst();
     }
 
     @Override
     public void setAdapter(ListAdapter adapter) {
-        super.setAdapter(adapter);
+        if (adapter != null) {
+            adapter.registerDataSetObserver(mDataSetObserver);
+        }
 
-        setSelection(1);
+        super.setAdapter(adapter);
+        // Ensure with new data the view is reinitialized to beginning
+        setSelectionToFirst();
+        // With different data we may need to adjust footer height
+		adaptFooterHeight();
+		mScrollPriorLast = -1;
     }
 
     /**
      * Set the listener that will receive notifications every time the list
      * scrolls.
-     * 
-     * @param l The scroll listener. 
+     *
+     * @param l The scroll listener.
      */
     @Override
     public void setOnScrollListener(AbsListView.OnScrollListener l) {
@@ -140,7 +264,7 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
 
     /**
      * Register a callback to be invoked when this list should be refreshed.
-     * 
+     *
      * @param onRefreshListener The callback to run.
      */
     public void setOnRefreshListener(OnRefreshListener onRefreshListener) {
@@ -148,7 +272,16 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     }
 
     /**
-     * Set a text to represent when the list was last updated. 
+     * Register a callback to be invoked when the end of the list is reached.
+     *
+     * @param onEndOfListListener The callback to run.
+     */
+    public void setOnEndOfListReachedListener(OnEndOfListReachedListener onEndOfListListener) {
+    	mOnEndOfListListener = onEndOfListListener;
+    }
+
+    /**
+     * Set a text to represent when the list was last updated.
      * @param lastUpdated Last updated at.
      */
     public void setLastUpdated(CharSequence lastUpdated) {
@@ -175,14 +308,13 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
                             || mRefreshView.getTop() >= 0)
                             && mRefreshState == RELEASE_TO_REFRESH) {
                         // Initiate the refresh
-                        mRefreshState = REFRESHING;
                         prepareForRefresh();
                         onRefresh();
                     } else if (mRefreshView.getBottom() < mRefreshViewHeight
                             || mRefreshView.getTop() <= 0) {
                         // Abort refresh and scroll down below the refresh view
                         resetHeader();
-                        setSelection(1);
+                        setSelectionToFirst();
                     }
                 }
                 break;
@@ -236,20 +368,19 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
      * Resets the header to the original state.
      */
     private void resetHeader() {
-        if (mRefreshState != TAP_TO_REFRESH) {
-            mRefreshState = TAP_TO_REFRESH;
+        mRefreshState = PULL_TO_REFRESH;
 
-            resetHeaderPadding();
+        resetHeaderPadding();
 
-            // Set refresh view text to the pull label
-            mRefreshViewText.setText(R.string.pull_to_refresh_tap_label);
-            // Replace refresh drawable with arrow drawable
-            mRefreshViewImage.setImageResource(R.drawable.ic_pulltorefresh_arrow);
-            // Clear the full rotation animation
-            mRefreshViewImage.clearAnimation();
-            // Hide progress bar and arrow.
-            mRefreshViewProgress.setVisibility(View.GONE);
-        }
+        // Set refresh view text to the pull label
+        mRefreshViewText.setText(R.string.pull_to_refresh_pull_label);
+        // Replace refresh drawable with arrow drawable
+        mRefreshViewImage.setImageResource(R.drawable.ic_pulltorefresh_arrow);
+        // Clear the full rotation animation
+        mRefreshViewImage.clearAnimation();
+        // Hide progress bar and arrow.
+        //mRefreshViewImage.setVisibility(View.GONE);
+        mRefreshViewProgress.setVisibility(View.GONE);
     }
 
     private void measureView(View child) {
@@ -272,7 +403,6 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
         child.measure(childWidthSpec, childHeightSpec);
     }
 
-    @Override
     public void onScroll(AbsListView view, int firstVisibleItem,
             int visibleItemCount, int totalItemCount) {
         // When the refresh view is completely visible, change the text to say
@@ -285,12 +415,10 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
                     mRefreshViewImage.clearAnimation();
                     mRefreshViewImage.startAnimation(mFlipAnimation);
                     mRefreshState = RELEASE_TO_REFRESH;
-                } else if ((mRefreshState == TAP_TO_REFRESH)||(mRefreshState == RELEASE_TO_REFRESH && mRefreshView.getBottom() <= mRefreshViewHeight)) {
+                } else if (mRefreshState == RELEASE_TO_REFRESH && mRefreshView.getBottom() <= mRefreshViewHeight) {
                     mRefreshViewText.setText(R.string.pull_to_refresh_pull_label);
-                    if (mRefreshState != TAP_TO_REFRESH) {
-                        mRefreshViewImage.clearAnimation();
-                        mRefreshViewImage.startAnimation(mReverseFlipAnimation);
-                    }
+                    mRefreshViewImage.clearAnimation();
+                    mRefreshViewImage.startAnimation(mReverseFlipAnimation);
                     mRefreshState = PULL_TO_REFRESH;
                 }
             } else {
@@ -299,10 +427,26 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
         } else if (mCurrentScrollState == SCROLL_STATE_FLING
                 && firstVisibleItem == 0
                 && mRefreshState != REFRESHING) {
-            setSelection(1);
+        	setSelectionToFirst();
             mBounceHack = true;
         } else if (mBounceHack && mCurrentScrollState == SCROLL_STATE_FLING) {
-            setSelection(1);
+        	setSelectionToFirst();
+        }
+
+        if(mOnEndOfListListener != null)
+        {
+        	// what is the bottom item that is visible
+        	int lastInScreen = firstVisibleItem + visibleItemCount;
+
+        	// is the bottom item visible
+        	if (lastInScreen == totalItemCount) {
+        		// Only do callback 1x when we reach the bottom
+        		if (mScrollPriorLast != lastInScreen) {
+        			mScrollPriorLast = lastInScreen;
+        			// Do end of list reached callback
+        			mOnEndOfListListener.onEndOfListReached();
+        		}
+        	}
         }
 
         if (mOnScrollListener != null) {
@@ -311,7 +455,6 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
         }
     }
 
-    @Override
     public void onScrollStateChanged(AbsListView view, int scrollState) {
         mCurrentScrollState = scrollState;
 
@@ -339,8 +482,6 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     }
 
     public void onRefresh() {
-        Log.d(TAG, "onRefresh");
-
         if (mOnRefreshListener != null) {
             mOnRefreshListener.onRefresh();
         }
@@ -358,16 +499,14 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
     /**
      * Resets the list to a normal state after a refresh.
      */
-    public void onRefreshComplete() {        
-        Log.d(TAG, "onRefreshComplete");
-
+    public void onRefreshComplete() {
         resetHeader();
 
         // If refresh view is visible when loading completes, scroll down to
         // the next item.
         if (mRefreshView.getBottom() > 0) {
             invalidateViews();
-            setSelection(1);
+            setSelectionToFirst();
         }
     }
 
@@ -377,8 +516,6 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
      * list.
      */
     private class OnClickRefreshListener implements OnClickListener {
-
-        @Override
         public void onClick(View v) {
             if (mRefreshState != REFRESHING) {
                 prepareForRefresh();
@@ -400,5 +537,16 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
          * expected to indicate that the refresh has completed.
          */
         public void onRefresh();
+    }
+
+    /**
+     * Interface definition for a callback to be invoked when end of list is reached.
+     */
+    public interface OnEndOfListReachedListener {
+        /**
+         * Called 1x when the end of list is reached. This might be used to implement an endless list which auto-loads more data as users scroll.
+         * It will only be called again if the adapter changes or the list grows/shrinks
+         */
+        public void onEndOfListReached();
     }
 }
