@@ -537,6 +537,9 @@ public class PullToRefreshListView extends ListView implements OnScrollListener 
             invalidateViews();
             setSelectionToFirst();
         }
+
+        // items may have changed, recalculate footer height
+        adaptFooterHeight();
     }
 
     /**
